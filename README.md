@@ -455,7 +455,7 @@ feature importance 확인 결과 중요도가 낮은 열의 경우 삭제를 하
 최적의 threshold를 기준으로 그리드서치를 진행하였습니다.
 그리드서치를 사용하여 catboost모델에서 최적의 파라미터를 찾을 수 있도록 하였습니다.
 
-
+```python
 
 # 그리드 서치
 
@@ -536,7 +536,7 @@ final_predictions = np.mean(ensemble_predictions, axis=0)
 print("Validation MAE scores for each fold:", scores)
 print("Validation MAE:", np.mean(scores))
 
-
+```
 
 
 
