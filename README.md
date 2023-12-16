@@ -3,7 +3,7 @@
 # 목차
   1. 공모전 개요
   2. EDA
-  3. 데이터 전처리리
+  3. 데이터 전처리
   4. 모델 구성
   5. 결과
 
@@ -335,6 +335,211 @@ train['holiday'] = train.apply(lambda x : 0 if x['day']<5 else 1, axis = 1)
 test['holiday'] = test.apply(lambda x : 0 if x['day']<5 else 1, axis = 1)
 
 ```
+
+# 4. 모델 구성
+
+## 4-1 DNN 모델 사용
+
+- 라이브러리 import
+
+```python
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+
+import lightgbm as lgb
+import bisect
+from tqdm import tqdm
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import KFold
+
+```
+
+- 정규화 진행
+
+```python
+
+# 정규화 진행
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+# Min-Max 스케일러 초기화 및 스케일링 적용
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.fit_transform(X_test)
+
+```
+
+- 모델 구성
+
+```python
+
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# 모델
+model = keras.Sequential([
+    layers.Dense(128, activation='relu', input_shape=(19,)),  # 입력 레이어
+    layers.Dense(128, activation='relu'),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(32, activation='relu'),
+    layers.Dense(1)  # 출력 레이어 (회귀 모델이므로 하나의 출력 뉴런)
+])
+
+# 모델 컴파일
+model.compile(optimizer='adam', loss='mean_absolute_error')
+
+# 모델 학습
+early_stopping = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10)
+model.fit(X_train_scaled, y_train, epochs=50, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
+# model.fit(X_train_scaled, y_train, epochs=50, batch_size=32, validation_split=0.2)
+
+# 모델 평가
+loss = model.evaluate(X_train_scaled, y_train)
+
+# 예측
+y_pred = model.predict(X_test_scaled)
+
+```
+
+
+## 4-2 Catboost 모델 사용
+
+```python
+
+from catboost import CatBoostRegressor
+
+def train_and_evaluate(model, model_name, X_train, y_train, cat_features= ['ARI_CO', 'ARI_PO', 'SHIP_TYPE_CATEGORY', 'ID', 'SHIPMANAGER', 'FLAG']):
+    print(f'Model Tune for {model_name}.')
+    model.fit(X_train, y_train, cat_features=cat_features)
+
+    feature_importances = model.feature_importances_
+    sorted_idx = feature_importances.argsort()
+
+    plt.figure(figsize=(10, len(X_train.columns)))
+    plt.title(f"Feature Importances ({model_name})")
+    plt.barh(range(X_train.shape[1]), feature_importances[sorted_idx], align='center')
+    plt.yticks(range(X_train.shape[1]), X_train.columns[sorted_idx])
+    plt.xlabel('Importance')
+    plt.show()
+
+    return model, feature_importances
+
+X_train = train.drop(columns='CI_HOUR')
+y_train = train['CI_HOUR']
+
+catboost_model = CatBoostRegressor()
+catboost_model, catboost_feature_importances = train_and_evaluate(catboost_model, 'CatBoost', X_train, y_train)
+
+```
+
+<feature importance 확인>
+
+![image](https://github.com/Yoon-Hee-Jae/HD/assets/140389762/75823961-7797-49e2-9bd2-f2c2c9e3e933)
+
+![image](https://github.com/Yoon-Hee-Jae/HD/assets/140389762/d3131854-db4e-4f30-a25b-20895dee0029)
+
+
+feature importance 확인 결과 중요도가 낮은 열의 경우 삭제를 하기로 하였습니다.
+최적의 삭제기준을 찾기 위해서 다양한 threshold 값들을 적용해보았습니다.
+이를 위해 k-fold 교차 검증을 실시하였고 각 폴드의 모델로부터 얻은 예측값을 평균하여 최종 앙상블 예측을 생성하였습니다.
+이때 평가기준은 실제값과 예측값간의 MAE를 기준으로 하였습니다.
+
+## Grid search 
+최적의 threshold를 기준으로 그리드서치를 진행하였습니다.
+그리드서치를 사용하여 catboost모델에서 최적의 파라미터를 찾을 수 있도록 하였습니다.
+
+
+
+# 그리드 서치
+
+import numpy as np
+import pandas as pd
+from catboost import CatBoostRegressor
+from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.metrics import mean_absolute_error
+
+# 가장 성능 좋았던 Threshold 정의
+threshold = 2.5
+
+best_mae = float('inf')
+best_threshold = None
+
+low_importance_features = X_train.columns[catboost_feature_importances < threshold]
+X_train_reduced = X_train.drop(columns=low_importance_features)
+X_test_reduced = test.drop(columns=low_importance_features)
+
+
+
+
+# GridSearchCV에 사용할 하이퍼파라미터 그리드 정의
+param_grid = {
+    'learning_rate': [0.1,0.2,0.3,0.4],
+    'depth': [10,11,12,13,14,15],
+    'iterations': [100,200,300,400,500]
+}
+
+# CatBoost 모델 초기화
+new_features = ['ARI_CO', 'ARI_PO', 'SHIP_TYPE_CATEGORY']
+catboost_model = CatBoostRegressor(cat_features=new_features)
+
+# GridSearchCV를 사용하여 하이퍼파라미터 튜닝
+grid_search = GridSearchCV(catboost_model, param_grid, scoring='neg_mean_absolute_error', cv=5, n_jobs=-1)
+grid_search.fit(X_train_reduced, y_train)
+
+# 최적의 하이퍼파라미터와 MAE 출력
+best_params = grid_search.best_params_
+best_mae = -grid_search.best_score_
+print('--- 최적 하이퍼 파라미터 ---')
+print("Best Hyperparameters:", best_params)
+print("Best Validation MAE:", best_mae)
+
+# 최적의 하이퍼파라미터로 모델 초기화
+best_catboost_model = CatBoostRegressor(**best_params)
+
+# 5-Fold 설정
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+
+# 각 fold의 모델로부터의 예측을 저장할 리스트와 MAE 점수 리스트
+ensemble_predictions = []
+scores = []
+
+for train_idx, val_idx in kf.split(X_train_reduced):
+    X_t, X_val = X_train_reduced.iloc[train_idx], X_train_reduced.iloc[val_idx]
+    y_t, y_val = y_train[train_idx], y_train[val_idx]
+
+    # CatBoost 모델 학습
+    best_catboost_model.fit(X_t, y_t,cat_features=new_features)
+
+    # 각 모델로부터 Validation set에 대한 예측을 평균내어 앙상블 예측 생성
+    val_pred = best_catboost_model.predict(X_val)
+
+    # Validation set에 대한 대회 평가 산식 계산 후 저장
+    scores.append(mean_absolute_error(y_val, val_pred))
+
+    # test 데이터셋에 대한 예측 수행 후 저장
+    catboost_pred = best_catboost_model.predict(X_test_reduced)
+    catboost_pred = np.where(catboost_pred < 0, 0, catboost_pred)
+
+    ensemble_predictions.append(catboost_pred)
+
+# K-fold 모든 예측의 평균을 계산하여 fold별 모델들의 앙상블 예측 생성
+final_predictions = np.mean(ensemble_predictions, axis=0)
+
+# 각 fold에서의 Validation Metric Score와 전체 평균 Validation Metric Score 출력
+print("Validation MAE scores for each fold:", scores)
+print("Validation MAE:", np.mean(scores))
+
+
+
+
+
 
 
 
